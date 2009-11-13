@@ -50,6 +50,8 @@
 		"AFcWxV21C7fd0v3bYYYRCpSSRl31Ac-RAs1SuG20a1IoPMJ0WKbx0fdG"
 		(format nil "http://~A:~A/return-paypal" response-host response-port)
 		(format nil "http://~A:~A/cancel-paypal" response-host response-port)
+		:useraction "commit"
+		:currencycode "EUR"
 		)
   (catch 'stop-server
     (hunchentoot:start-server :port response-port

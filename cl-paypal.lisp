@@ -11,8 +11,11 @@
    (response-string :initarg :response-string)))
 
 (define-condition response-error (paypal-error)
-  ((response :initarg :response)
-   (invalid-parameter :initarg :invalid-parameter)))
+  ((response :accessor response-error-response :initarg :response)
+   (invalid-parameter :initarg :invalid-parameter))
+  (:report (lambda (condition stream)
+             (let ((*print-length* 20))
+               (format stream "Response: ~S" (response-error-response condition))))))
 
 (define-condition transaction-already-confirmed-error (response-error)
   ())
@@ -41,7 +44,7 @@
   use, additional keyword arguments are passed as parameters to the
   API.  Returns "
   (multiple-value-bind (response-string http-status)
-      (drakma:http-request *paypal-url*
+      (drakma:http-request *paypal-api-url*
                            :method :post
                            :parameters (append (list (cons "METHOD" method)
                                                      (cons "VERSION" "52.0")
@@ -67,26 +70,27 @@
   "store checkout amount between make-express-checkout-url and get-and-do-express-checkout")
 
 (defun make-express-checkout-url (amount 
-				  &optional 
+				  &key
 				  (return-url *paypal-return-url*)
-				  (cancel-url *paypal-return-url*)
-				  )
+				  (cancel-url *paypal-cancel-url*)
+				  (useraction *paypal-useraction*)
+				  (currencycode *paypal-currencycode*)
+                                  (sandbox t)
+                                  (hostname (if sandbox
+                                              "www.sandbox.paypal.com"
+                                              "www.paypal.com")))
   (let* ((amt (format nil "~,2F" amount))
 	 (token (getf (request "SetExpressCheckout"
                                :amt amt
-       ;; currencycode is not supported by SetExpressCheckoutPayment
+			       :currencycode currencycode
                                :returnurl return-url
                                :cancelurl cancel-url
                                :paymentaction "Sale")
                       :token)))
-    (setf *checkout-amount* amt)
-    (format nil "https://www.sandbox.paypal.com/webscr?cmd=_express-checkout&token=~A~
-                                     &AMT=~A&RETURNURL=~A&CANCELURL=~A"
-             (hunchentoot:url-encode token)
-             amt
-             (hunchentoot:url-encode return-url)
-             (hunchentoot:url-encode cancel-url))
-    ))
+    (format nil "https://~A/webscr?cmd=_express-checkout&token=~A&useraction=~A"
+            hostname
+	    (hunchentoot:url-encode token)
+	    (hunchentoot:url-encode useraction))))
 
 (defun get-and-do-express-checkout (success failure)
   (with-output-to-string (*standard-output*)
