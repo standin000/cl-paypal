@@ -10,5 +10,6 @@
    #:paypal-error
    #:request-error
    #:http-request-error
-   #:response-error))
+   #:response-error
+   #:transaction-already-confirmed-error))
 

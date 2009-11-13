@@ -14,6 +14,9 @@
   ((response :initarg :response)
    (invalid-parameter :initarg :invalid-parameter)))
 
+(define-condition transaction-already-confirmed-error (response-error)
+  ())
+
 (defun decode-response (response)
   "Decode a paypal response string, which is URL encoded and follow
   list encoding rules.  Returns the parameters as a plist."
@@ -55,7 +58,9 @@
       (error 'http-request-error :http-status http-status :response-string response-string))
     (let ((response (decode-response response-string)))
       (unless (string-equal "Success" (getf response :ack))
-        (error 'request-error :response response))
+        (if (equal "10415" (car (getf response :errorcode)))
+          (error 'transaction-already-confirmed-error :response response)
+          (error 'response-error :response response)))
       response)))
 
 (defvar *checkout-amount* 0 
