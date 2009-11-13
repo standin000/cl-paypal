@@ -66,8 +66,24 @@
           (error 'response-error :response response)))
       response)))
 
-(defvar *checkout-amount* 0 
-  "store checkout amount between make-express-checkout-url and get-and-do-express-checkout")
+;; TODO should record time and gc this table regularly
+;; also limit number of unfinished txns per ip to avoid
+;; attackers filling up our heap.
+(defvar *active-transactions* (make-hash-table :test #'equalp))
+
+(defun register-transaction (token amount currencycode)
+  (when (gethash token *active-transactions*)
+    (error "Attempt to register already existing transaction with token ~S." token))
+  (setf (gethash token *active-transactions*) (cons amount currencycode)))
+
+(defun unregister-transaction (token)
+  (remhash token *active-transactions*))
+
+(defun find-transaction (token &optional (errorp t))
+  (let ((result (gethash token *active-transactions*)))
+    (when (and (not result) errorp)
+      (error "Couldn't find transaction for token ~S" token))
+    result))
 
 (defun make-express-checkout-url (amount 
 				  &key
@@ -87,6 +103,7 @@
                                :cancelurl cancel-url
                                :paymentaction "Sale")
                       :token)))
+    (register-transaction token amt currencycode)
     (format nil "https://~A/webscr?cmd=_express-checkout&token=~A&useraction=~A"
             hostname
 	    (hunchentoot:url-encode token)
@@ -95,18 +112,22 @@
 (defun get-and-do-express-checkout (success failure)
   (with-output-to-string (*standard-output*)
     (let* ((token (hunchentoot:get-parameter "token"))
-	   (response (request "GetExpressCheckoutDetails" :token token))
-	   (payerid (getf response :payerid))
-	   (result (request "DoExpressCheckoutPayment"
-				      :token token
-				      :payerid payerid
-				      ;; amt is not returned by GetExpressCheckoutDetails 
-				      ;; currencycode is not supported by DoExpressCheckoutPayment
-				      :amt *checkout-amount*
-				      :paymentaction "Sale"))
-	   )
-      (if (string-equal "Success" (getf result :ack))
-	  (apply success '())
-	  (apply failure '())
-	  )
-      )))
+           (txn (find-transaction token nil)))
+      (if txn
+        (destructuring-bind (amount . currencycode) txn
+          (let* ((response (request "GetExpressCheckoutDetails" :token token))
+                 (payerid (getf response :payerid))
+                 (result (request "DoExpressCheckoutPayment"
+                                  :token token
+                                  :payerid payerid
+                                  ;; amt and currencycode are not returned by GetExpressCheckoutDetails 
+                                  :amt amount
+                                  :currencycode currencycode 
+                                  :paymentaction "Sale"))
+                 (success-p (string-equal "Success" (getf result :ack))))
+            (when success-p
+              (unregister-transaction token))
+            (funcall (if success-p success failure)
+              :amount amount :currencycode currencycode :token token :result result)))
+        (funcall failure)))))
+
