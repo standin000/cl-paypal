@@ -70,13 +70,29 @@
 ;; also limit number of unfinished txns per ip to avoid
 ;; attackers filling up our heap.
 (defvar *active-transactions* (make-hash-table :test #'equalp))
+(defvar *transaction-ips* nil)
 
-(defun register-transaction (token amount currencycode)
+(defun register-transaction (token amount currencycode ip)
   (when (gethash token *active-transactions*)
     (error "Attempt to register already existing transaction with token ~S." token))
-  (setf (gethash token *active-transactions*) (cons amount currencycode)))
+     ;; Garbage collection
+  (if (>= (hash-table-count *active-transactions*) *paypal-max-active-transactions*)
+      (with-hash-table-iterator (next-entry *active-transactions*)
+        (loop (multiple-value-bind (more key value) (next-entry)
+             (unless more (return nil))
+             (when (> (- (get-universal-time) (fourth value))
+                    (* 60 *paypal-max-token-live-period*))
+                 (unregister-transaction key))))))
+  (if (>= (count ip *transaction-ips* :test #'equal) *paypal-max-transaction-per-ip*)
+      (error "Attempt to make more than ~A transactions per IP" *paypal-max-transaction-per-ip*)
+      (push ip *transaction-ips*))
+  (setf (gethash token *active-transactions*) 
+        (list amount currencycode ip (get-universal-time))))
 
 (defun unregister-transaction (token)
+  (setf *transaction-ips*
+   (remove (third (gethash token *active-transactions*)) 
+           *transaction-ips* :test #'equal :count 1))
   (remhash token *active-transactions*))
 
 (defun find-transaction (token &optional (errorp t))
@@ -86,6 +102,7 @@
     result))
 
 (defun make-express-checkout-url (amount 
+                                  ip
 				  &key
 				  (return-url *paypal-return-url*)
 				  (cancel-url *paypal-cancel-url*)
@@ -103,7 +120,7 @@
                                :cancelurl cancel-url
                                :paymentaction "Sale")
                       :token)))
-    (register-transaction token amt currencycode)
+    (register-transaction token amt currencycode ip)
     (format nil "https://~A/webscr?cmd=_express-checkout&token=~A&useraction=~A"
             hostname
 	    (hunchentoot:url-encode token)
@@ -114,7 +131,8 @@
     (let* ((token (hunchentoot:get-parameter "token"))
            (txn (find-transaction token nil)))
       (if txn
-        (destructuring-bind (amount . currencycode) txn
+        (destructuring-bind (amount currencycode ip time) txn
+          (declare (ignore ip time))
           (let* ((response (request "GetExpressCheckoutDetails" :token token))
                  (payerid (getf response :payerid))
                  (result (request "DoExpressCheckoutPayment"
@@ -127,7 +145,8 @@
                  (success-p (string-equal "Success" (getf result :ack))))
             (when success-p
               (unregister-transaction token))
-            (funcall (if success-p success failure)
-              :amount amount :currencycode currencycode :token token :result result)))
+            (if success-p 
+                (funcall success :amount amount :currencycode currencycode :token token :result result) 
+                (funcall failure))))
         (funcall failure)))))
 

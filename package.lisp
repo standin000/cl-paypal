@@ -11,5 +11,8 @@
    #:request-error
    #:http-request-error
    #:response-error
-   #:transaction-already-confirmed-error))
+   #:transaction-already-confirmed-error
+   #:*paypal-max-active-transactions*
+   #:*paypal-max-token-live-period*
+   #:*paypal-max-transaction-per-ip*))
 
